@@ -1264,45 +1264,69 @@ app.use((err: any, _req: Request, res: Response, _next: any) => {
   res.status(err?.statusCode || 500).json({ success: false, message: "Internal server error" });
 });
 
-// In production, refuse to start with insecure default secrets.
-function assertProductionConfig() {
-  if (process.env.NODE_ENV !== "production") return;
+// Report which required production config is missing/insecure.
+function productionConfigProblems(): string[] {
+  if (process.env.NODE_ENV !== "production") return [];
   const problems: string[] = [];
   if (!process.env.JWT_ACCESS_SECRET || !process.env.JWT_REFRESH_SECRET) problems.push("JWT secrets");
   if (!process.env.ADMIN_KEY || process.env.ADMIN_KEY === "peelgood_admin_secret_2026") problems.push("ADMIN_KEY");
   if (!process.env.DATABASE_URL) problems.push("DATABASE_URL");
   if (!process.env.RAZORPAY_KEY_SECRET || process.env.RAZORPAY_KEY_SECRET === "mock_secret_key_12345")
     problems.push("Razorpay secret");
-  if (problems.length > 0) {
-    console.error(`❌ Refusing to start: missing/insecure production config → ${problems.join(", ")}`);
-    process.exit(1);
-  }
+  return problems;
+}
+
+// Graceful shutdown so in-flight requests finish and the DB pool closes cleanly.
+function attachShutdown(server: ReturnType<typeof app.listen>) {
+  const shutdown = (signal: string) => {
+    console.log(`${signal} received — shutting down gracefully...`);
+    server.close(() => {
+      pool.end().finally(() => process.exit(0));
+    });
+    setTimeout(() => process.exit(1), 10_000).unref();
+  };
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 }
 
 // Start Server
 const PORT = config.port;
+const configProblems = productionConfigProblems();
 
-assertProductionConfig();
+if (configProblems.length > 0) {
+  // Misconfigured in production. Instead of crash-looping (which floods logs and
+  // never lets you diagnose), start a minimal server that reports the problem
+  // clearly on /api/health and refuses real traffic with a 503.
+  console.error(
+    `❌ Missing/insecure production config → ${configProblems.join(", ")}. ` +
+      `Set these environment variables on your host, then redeploy.`
+  );
 
-initDb()
-  .then(() => {
-    const server = app.listen(PORT, () => {
-      console.log(`🚀 StickerHub backend running on port ${PORT}`);
-    });
-
-    // Graceful shutdown so in-flight requests finish and the DB pool closes cleanly.
-    const shutdown = (signal: string) => {
-      console.log(`${signal} received — shutting down gracefully...`);
-      server.close(() => {
-        pool.end().finally(() => process.exit(0));
-      });
-      // Force-exit if cleanup hangs.
-      setTimeout(() => process.exit(1), 10_000).unref();
-    };
-    process.on("SIGTERM", () => shutdown("SIGTERM"));
-    process.on("SIGINT", () => shutdown("SIGINT"));
-  })
-  .catch((err) => {
-    console.error("Failed to start server due to DB connection:", err);
-    process.exit(1);
+  const minimal = express();
+  minimal.get("/api/health", (_req, res) =>
+    res.status(503).json({
+      status: "misconfigured",
+      missing: configProblems,
+      message: "Set the required environment variables on your host, then redeploy.",
+    })
+  );
+  minimal.use((_req, res) =>
+    res.status(503).json({ success: false, message: "Service not configured. Contact the administrator." })
+  );
+  const server = minimal.listen(PORT, () => {
+    console.error(`⚠️  StickerHub backend started in DEGRADED mode on port ${PORT} (config incomplete).`);
   });
+  attachShutdown(server);
+} else {
+  initDb()
+    .then(() => {
+      const server = app.listen(PORT, () => {
+        console.log(`🚀 StickerHub backend running on port ${PORT}`);
+      });
+      attachShutdown(server);
+    })
+    .catch((err) => {
+      console.error("Failed to start server due to DB connection:", err);
+      process.exit(1);
+    });
+}
