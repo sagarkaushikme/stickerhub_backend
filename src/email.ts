@@ -54,7 +54,7 @@ function layout(title: string, body: string): string {
     ${body}
     <hr style="border:none; border-top:1px solid #e2e8f0; margin:24px 0;" />
     <p style="color:#94a3b8; font-size:11px; text-align:center;">
-      ${BRAND} · Premium waterproof vinyl stickers<br/>
+      ${BRAND} · Premium waterproof stickers<br/>
       Need help? Reply to this email or write to ${config.resend.replyTo}.
     </p>
   </div>`;

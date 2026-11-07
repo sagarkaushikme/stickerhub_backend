@@ -95,7 +95,7 @@ export async function initDb() {
     await client.query(`
       INSERT INTO store_settings (key, value)
       VALUES 
-        ('announcement', '{"text": "Free shipping across India · Waterproof die-cut vinyl", "active": true}'::jsonb),
+        ('announcement', '{"text": "Free shipping across India · Waterproof die-cut", "active": true}'::jsonb),
         ('marquee', '{"text": "WATERPROOF DIE-CUT · SCRATCH RESISTANT · NO RESIDUE · GLOSSY FINISH", "active": true}'::jsonb)
       ON CONFLICT (key) DO NOTHING;
     `);
