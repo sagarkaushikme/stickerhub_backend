@@ -83,10 +83,14 @@ app.use(
         return callback(null, true);
       }
       // In production, allow only the configured shop + admin origins.
+      // When ALLOWED_ORIGINS is not set (empty list), allow all origins (dev/staging mode).
       if (config.allowedOrigins.length === 0 || config.allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
-      return callback(new Error(`Origin ${origin} not allowed by CORS`));
+      // Do NOT throw an Error here — that bubbles to the global error handler and
+      // logs a noisy "Unhandled error" for every blocked preflight. Instead, pass
+      // null + false so the cors package sends the correct 403 response itself.
+      return callback(null, false);
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -327,10 +331,14 @@ app.post("/api/auth/verify-otp", authLimiter, async (req: Request, res: Response
 
     const { accessToken, refreshToken } = generateTokens(user);
 
+    // In production the frontend is on a different origin (stickerhub.in) from the
+    // backend API, so the refresh-token cookie must be SameSite=None + Secure to
+    // be included in cross-site requests. In dev, lax is fine (same host).
+    const isProduction = process.env.NODE_ENV === "production";
     res.cookie("refreshToken", refreshToken, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
+      secure: isProduction,
+      sameSite: isProduction ? "none" : "lax",
       maxAge: 30 * 24 * 60 * 60 * 1000,
     });
 
@@ -461,7 +469,12 @@ app.get("/api/auth/me", requireAuth, async (req: AuthenticatedRequest, res: Resp
 
 // Step 6: Logout
 app.post("/api/auth/logout", (_req: Request, res: Response) => {
-  res.clearCookie("refreshToken");
+  const isProduction = process.env.NODE_ENV === "production";
+  res.clearCookie("refreshToken", {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? "none" : "lax",
+  });
   return res.json({ success: true, message: "Logged out successfully" });
 });
 
@@ -1273,6 +1286,14 @@ function productionConfigProblems(): string[] {
   if (!process.env.DATABASE_URL) problems.push("DATABASE_URL");
   if (!process.env.RAZORPAY_KEY_SECRET || process.env.RAZORPAY_KEY_SECRET === "mock_secret_key_12345")
     problems.push("Razorpay secret");
+  // Warn (but don't block startup) when ALLOWED_ORIGINS is not set — the server
+  // will accept requests from any origin which is insecure in production.
+  if (!process.env.ALLOWED_ORIGINS) {
+    console.warn(
+      "⚠️  ALLOWED_ORIGINS is not set. The API will accept requests from any origin. " +
+        "Set ALLOWED_ORIGINS=https://stickerhub.in,https://admin.stickerhub.in on Railway."
+    );
+  }
   return problems;
 }
 

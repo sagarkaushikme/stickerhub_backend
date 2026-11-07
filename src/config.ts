@@ -5,10 +5,31 @@ export const config = {
   port: Number(process.env.PORT || 4000),
   clientUrl: process.env.CLIENT_URL || "http://localhost:5173",
   // Comma-separated list of allowed production origins (shop + admin).
-  allowedOrigins: (process.env.ALLOWED_ORIGINS || "")
-    .split(",")
-    .map((o) => o.trim())
-    .filter(Boolean),
+  // Auto-expands each https://example.com entry to also allow https://www.example.com
+  // so you don't need to list both variants in the env var.
+  allowedOrigins: (() => {
+    const raw = (process.env.ALLOWED_ORIGINS || "")
+      .split(",")
+      .map((o) => o.trim())
+      .filter(Boolean);
+    const expanded = new Set<string>(raw);
+    for (const origin of raw) {
+      try {
+        const url = new URL(origin);
+        // If bare domain (no www), also add the www variant
+        if (!url.hostname.startsWith("www.")) {
+          expanded.add(`${url.protocol}//www.${url.hostname}${url.port ? `:${url.port}` : ""}`);
+        }
+        // If www domain, also add the bare variant
+        if (url.hostname.startsWith("www.")) {
+          expanded.add(`${url.protocol}//${url.hostname.slice(4)}${url.port ? `:${url.port}` : ""}`);
+        }
+      } catch {
+        // Invalid URL — keep it as-is
+      }
+    }
+    return [...expanded];
+  })(),
   jwt: {
     accessSecret: process.env.JWT_ACCESS_SECRET || "super_secret_access_jwt_key_99812",
     refreshSecret: process.env.JWT_REFRESH_SECRET || "super_secret_refresh_jwt_key_99812",
